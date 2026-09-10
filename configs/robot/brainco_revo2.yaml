@@ -1,0 +1,5 @@
+# 强脑 Revo2 灵巧手（SDK 待确认，见 robots/brainco_revo2/README.md）
+name: brainco_revo2
+interface: null
+control_hz: 50.0
+finger_joints: null      # 自由度数待 SDK 摸底后填

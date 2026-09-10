@@ -1,0 +1,8 @@
+# Mock 多阶段 pick-and-place 任务（2D，纯 numpy）——SARM2 论文 10 任务基准的 mock 替身
+# task_id 0/1 训练、2 held-out（阶段估计器迁移评测用）
+name: mock_pick_place
+task_id: 0
+max_episode_steps: 90
+action_limit: 0.10
+expert_gain: 0.35      # 内置脚本专家增益
+expert_noise: 0.02     # 专家动作噪声（示教不完美性）

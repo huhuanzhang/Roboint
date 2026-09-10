@@ -1,0 +1,6 @@
+# GR00T N1.7 基模（接入中，见 models/gr00t_n17/README.md）
+name: gr00t_n17
+pretrained_path: null
+embodiment: unitree_humanoid_revo2   # GR00T 的跨本体配置标签
+chunk_size: 16
+action_dim: null        # 按 embodiment 配置解析

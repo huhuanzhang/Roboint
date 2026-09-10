@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robo-int"
+version = "0.1.0"
+description = "真机机器人 VLA / RL 后训练研究基础设施（对标 RLinf），服务于灵巧手与人形 VLA 任务"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.2",
+    "omegaconf>=2.3",
+    "hydra-core>=1.3",
+]
+
+[project.optional-dependencies]
+# 各真机/基模依赖按需安装，避免一条巨型依赖链。
+# 注意：包名与版本在真正接入时逐一验证后再落定（TODO 标注处）。
+pi05 = [
+    # TODO: 接入 π0.5 时补齐（openpi / lerobot 生态），当前留空以保证骨架可安装
+]
+gr00t = [
+    # TODO: 接入 GR00T N1.7 时补齐（NVIDIA Isaac-GR00T，可能含 flash-attn 等 Linux-only 依赖）
+]
+fast_wam = [
+    # TODO: Fast-WAM 无官方开源实现，需按论文自复现
+]
+unitree = [
+    # TODO: Unitree 人形 SDK（unitree_sdk2 的 Python 绑定）
+]
+revo2 = [
+    # TODO: 强脑 Revo2 灵巧手 SDK（待确认开放程度与安装方式）
+]
+data = [
+    # TODO: LeRobot dataset 格式读写（与 pi05/gr00t 微调生态对齐）
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+]
+wandb = [
+    "wandb>=0.17",
+]
+
+[tool.setuptools.packages.find]
+include = ["robo_int*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: 需要真实 GPU 的测试（本地默认跳过）",
+    "robot: 需要真机在线的测试（本地默认跳过）",
+    "slow: 耗时较长的测试",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]

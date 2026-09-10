@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# 环境
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# 实验产物
+outputs/
+data/raw/
+data/processed/
+data/episodes/
+runs/
+wandb/
+checkpoints/
+*.ckpt
+*.pt
+*.npz
+
+# Hydra 多运行产物
+multirun/
+
+# 系统文件
+.DS_Store
+Thumbs.db

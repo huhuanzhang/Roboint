@@ -1,0 +1,7 @@
+# π0.5 基模（接入中，见 models/pi05/README.md）
+name: pi05
+pretrained_path: null    # HF 权重名或本地路径
+chunk_size: 10
+action_dim: 7            # 6 ee pose + 1 gripper（按本体适配调整）
+denoising_steps: 10
+freeze_backbone: false

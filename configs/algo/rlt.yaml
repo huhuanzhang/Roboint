@@ -1,0 +1,7 @@
+# RLT（RL Token）：冻结 VLA + RL token + actor-critic 在线 RL
+# 论文 arXiv:2604.23073（无官方代码）；差异表见 robo_int/algos/rlt/README.md
+name: rlt
+token_dim: 64          # RL token 维度（论文用 transformer 读出，mock 用 MLP 自编码）
+action_mode: direct    # direct | residual（residual = actor 输出加在 VLA 动作上，本仓库设计选择）
+utd: 2                 # 每步环境交互的更新次数（updates-to-data）
+start_steps: 300       # 预热随机探索步数

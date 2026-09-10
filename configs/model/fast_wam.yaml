@@ -1,0 +1,5 @@
+# Fast-WAM（World Action Model 路线，需自复现，见 models/fast_wam/README.md）
+name: fast_wam
+video_backbone: null    # 冻结的视频/世界模型骨干
+chunk_size: 8
+action_dim: null

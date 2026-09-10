@@ -1,0 +1,6 @@
+# MockVLA：与真基模同接口的小模型，本地全链路验证用
+name: mock
+state_dim: 4        # 对齐 task.mock_reach 的观测（pos2+goal2）
+action_dim: 2
+chunk_size: 1
+hidden_dim: 128

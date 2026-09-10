@@ -1,0 +1,21 @@
+# 顶层配置：按组组合 robot / task / model / algo / infra / data
+# 切换实验示例：
+#   python scripts/train_sft.py model=mock infra.regularization.dropout=0.1
+#   python scripts/train_sft.py model=pi05   （接入后）
+
+defaults:
+  - robot: mock
+  - task: mock_reach
+  - model: mock
+  - algo: sft
+  - infra: train
+  - data: collect
+  - eval: default
+  - _self_
+
+seed: 0
+
+hydra:
+  job:
+    chdir: false   # 保持相对路径（data/、outputs/）在所有脚本间一致
+

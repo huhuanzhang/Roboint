@@ -1,0 +1,33 @@
+# SARM2：多任务阶段感知奖励模型（阶段估计器 + 多门 MoE 值解码器）
+# 论文 arXiv:2606.10305，官方代码 xdofai/opensarm；差异表见 robo_int/algos/sarm2/README.md
+# 以下为 mock 级超参（CPU 可跑）；论文/官方规模（d=512、6/4 层、E=10×3×256、30k 步）见 README 差异表
+name: sarm2
+state_dim: 6            # mock_pick_place 状态维度（真机 = 冻结视觉嵌入维度）
+num_tasks: 3            # 任务数（e_task 嵌入表大小；mock_pick_place 3 变体）
+primitives: ["null", approach, grasp, transport, release, retreat]   # 原语词汇表（K+1，首为 null；裸 null 会被 YAML 解析成 None，必须引号）
+groups:                                                 # 语义分组（M+1 个门），"a or b" 解析
+  - "null"
+  - approach or retreat
+  - grasp or release
+  - transport
+d_model: 64             # 官方 512
+stage_layers: 2         # 阶段估计器层数（官方 4）
+value_layers: 2         # 值解码器层数（官方 6）
+n_heads: 4
+dropout: 0.1
+n_obs_steps: 6          # mid 窗口帧数（官方 6）
+frame_gap: 2            # 窗口帧间隔（官方 30 ≈ 6s@30Hz；mock episode 短，取 2）
+max_rewind_steps: 3     # rewind 帧上限（官方 3，ReWiND 式隐式负样本）
+num_experts: 10         # E（官方 10）
+top_k: 2                # 官方 2
+gate_hidden: 64         # 门网络隐层（官方 256）
+expert_hidden: 64       # 专家隐层 ×3（官方 3×256）
+lambda_balance: 2.5     # 官方/论文同值
+lambda_entropy: 0.5     # 官方/论文同值（符号按官方代码：最大化路由熵）
+lambda_importance: 0.1  # 官方有、论文未提（差异表 #4）
+alpha_auxiliary: 0.2    # 辅助损失总权重（官方有、论文未提）
+finetune_stage: true    # value 阶段联合微调估计器（官方 finetune_act_pri）
+stage_loss_weight: 0.25 # 联合微调时阶段 CE 权重（官方 act_pri_loss_weight）
+lr: 5.0e-4              # 官方 5e-5@30k 步；mock 1k 步量级故放大
+weight_decay: 5.0e-3    # 官方同值
+total_steps: 2000       # 每 phase 步数上限（调度器用）

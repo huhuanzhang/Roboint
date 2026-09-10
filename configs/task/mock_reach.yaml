@@ -1,0 +1,6 @@
+# Mock reaching 任务（2D 点到点，纯 numpy）
+name: mock_reach
+max_episode_steps: 50
+success_radius: 0.08
+action_limit: 0.15
+expert_gain: 0.8       # 内置比例控制器专家的增益

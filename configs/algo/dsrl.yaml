@@ -1,0 +1,7 @@
+# DSRL：扩散策略 latent-noise steering（带 MEM，stub）
+name: dsrl
+mem:
+  enabled: true
+  short_horizon: 16
+  long_store_size: 1024
+noise_dim: null        # 跟随底座扩散策略

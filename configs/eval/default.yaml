@@ -1,0 +1,4 @@
+# 评测配置（scripts/eval_on_robot.py）
+ckpt: outputs/run/checkpoints/final.ckpt
+num_episodes: 20
+seed: null

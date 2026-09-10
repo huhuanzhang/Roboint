@@ -1,0 +1,5 @@
+# Unitree 人形（接入中，见 robots/unitree/README.md）
+name: unitree_g1
+interface: null          # DDS 接口配置，接入时落定
+control_hz: 50.0
+arm_joints: 14           # 双臂 7+7（型号确认后修正）

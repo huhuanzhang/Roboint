@@ -1,0 +1,4 @@
+# Mock 机器人（理想执行器）
+name: mock
+num_joints: 6
+control_hz: 10.0

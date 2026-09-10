@@ -1,0 +1,22 @@
+# 训练 infra：正则化选项是一等公民（用户点名的基础设施能力）
+total_steps: 2000
+batch_size: 64
+log_every: 20
+checkpoint_every: 500
+seed: 0
+device: cpu            # Linux GPU 上覆盖为 cuda
+run_dir: outputs/run
+
+optimizer:
+  lr: 1.0e-3
+  optimizer: adamw
+  betas: [0.9, 0.999]
+  scheduler: null
+  warmup_steps: 0
+
+regularization:
+  dropout: 0.0          # dropout 选项：经 factory 注入模型构造
+  weight_decay: 0.0
+  grad_clip_norm: null
+  label_smoothing: 0.0
+  ema_decay: null

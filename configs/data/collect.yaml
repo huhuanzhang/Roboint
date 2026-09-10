@@ -1,0 +1,7 @@
+# 数采 / 评测 / 清洗共用数据配置
+data_dir: data/episodes
+num_episodes: 10
+seed: 0
+save_episodes: true
+min_score: 0.3
+max_steps_percentile: 99.0
