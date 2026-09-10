@@ -69,6 +69,16 @@ def build_model(cfg: DictConfig) -> BaseVLA:
     if name == "pi05":
         from robo_int.models.pi05 import Pi05VLA  # 触发带指引的 NotImplementedError
         return Pi05VLA()
+    if name == "pi05_server":
+        # 推理-only：复用 smolvla_piper_control_gui 的 policy server（见 models/pi05_server.py）
+        from robo_int.models.pi05_server import Pi05ServerPolicy
+
+        return Pi05ServerPolicy(
+            host=cfg.model.get("host", "127.0.0.1"),
+            port=int(cfg.model.get("port", 8011)),
+            prompt=cfg.model.get("prompt", "fold the clothes neatly"),
+            actions_per_inference=int(cfg.model.get("actions_per_inference", 8)),
+        )
     if name == "gr00t_n17":
         from robo_int.models.gr00t_n17 import Gr00tN17VLA
         return Gr00tN17VLA()

@@ -1,0 +1,18 @@
+# π0.5 推理接入：作为客户端复用 smolvla_piper_control_gui 的 policy server。
+# checkpoint 不复制进本仓库，运行时按 gui_profile_id 从 GUI 注册配置取真实路径。
+name: pi05_server
+host: 127.0.0.1
+port: 8011
+actions_per_inference: 8
+state_dim: 14
+action_dim: 14
+prompt: fold the clothes neatly
+openpi_client_src: /home/ps/Documents/kai0/packages/openpi-client/src
+# GUI 侧真实运行配置（checkpoint 路径 + 安全参数 + prompt 的唯一来源）
+gui_config: /home/ps/Documents/zhanghaoyi/smolvla_piper_control_gui/config.json
+gui_profile_id: pi05_piper_fold_clothes_150000
+server_launcher: /home/ps/Documents/zhanghaoyi/smolvla_piper_control_gui/start_smolvla_server.sh
+server_start_timeout_s: 300
+# RTC：GUI 真实叠衣服使用 RTC=true（delay=2, horizon=10, weight=10, EXP）。
+# smoke test 第一阶段只验证链路，默认关；接 RTC 时由 server 端参数开启。
+rtc_enabled: false

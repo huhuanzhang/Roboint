@@ -1,0 +1,17 @@
+# Piper 双臂（Agibot Piper x2）：左臂 can0、右臂 can1，state/action 14D
+# 相机 serial 与 smolvla_piper_control_gui/start_smolvla_dual_arm_client.sh 的
+# DEFAULT_ROBOT_CAMERAS_JSON 一致；checkpoint 只要求其中三路（server metadata 决定）
+name: piper_dual_arm
+left_can_name: can0
+right_can_name: can1
+control_hz: 30.0
+gripper_effort: 1000
+camera_fps: 30
+camera_width: 640
+camera_height: 480
+cameras:
+  head: 254622073267
+  left_wrist: 244222071617
+  right_wrist: 317622070857
+  front_view: 254622079402
+lerobot_piper_root: /home/ps/Documents/lerobot-piper-2
