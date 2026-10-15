@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,9 +21,10 @@ from pathlib import Path
 import numpy as np
 
 from robo_int.robots.base import BaseRobot, RobotState
+from robo_int.robots.piper_safety import PiperDualArmSafetyChain
 
-# 与 GUI client 一致的默认路径
-DEFAULT_LEROBOT_PIPER_ROOT = Path("/home/ps/Documents/lerobot-piper-2")
+# 默认从相邻 checkout 加载，也可通过参数或 LEROBOT_PIPER_ROOT 指定。
+DEFAULT_LEROBOT_PIPER_ROOT = Path(__file__).resolve().parents[3] / "lerobot-piper-2"
 
 # GUI config.json 中真实在用的四路相机（checkpoint 只要求其中三路，见 model 配置）
 DEFAULT_CAMERAS = {
@@ -50,8 +52,9 @@ class PiperDualArmRobot(BaseRobot):
         height: int = 480,
         gripper_effort: int = 1000,
         control_hz: float = 30.0,
-        lerobot_piper_root: str | Path = DEFAULT_LEROBOT_PIPER_ROOT,
+        lerobot_piper_root: str | Path | None = None,
         cameras_only: bool = False,
+        safety_params: dict | None = None,
     ):
         self.camera_serials = dict(cameras) if cameras else dict(DEFAULT_CAMERAS)
         self.left_can_name = left_can_name
@@ -61,9 +64,14 @@ class PiperDualArmRobot(BaseRobot):
         self.height = height
         self.gripper_effort = gripper_effort
         self.control_hz = control_hz
-        self.lerobot_piper_root = Path(lerobot_piper_root)
+        self.lerobot_piper_root = Path(
+            lerobot_piper_root or os.environ.get("LEROBOT_PIPER_ROOT") or DEFAULT_LEROBOT_PIPER_ROOT
+        ).expanduser()
         # 诊断模式：臂控未上电时只连相机，state 用零向量（server validate_inference 同做法）
         self.cameras_only = cameras_only
+        # 安全链参数默认取 GUI profile 的已验证值（configs/robot/piper_dual_arm.yaml 同源）
+        self.safety = PiperDualArmSafetyChain(**(safety_params or {}))
+        self._last_state: np.ndarray | None = None
         self._robot = None
         self._cameras = {}
         self._connected = False
@@ -178,16 +186,18 @@ class PiperDualArmRobot(BaseRobot):
             if not arm.connect(enable=True):
                 raise RuntimeError(f"Failed to enable {name} arm on {arm.can_name}.")
 
-    def disable(self) -> None:
-        """回安全姿态并去使能（沿用 GUI client 的 disable_robot_arms）。"""
+    def disable(self, *, de_energize: bool = True) -> None:
+        """回安全姿态；de_energize=False 时保持使能（沿用 GUI client 约定：
+        默认 DISABLE_ARM_ON_EXIT=false 退出不去使能，去使能是显式动作）。"""
         self._assert_connected()
         for name, arm in self._robot.follower_arms.items():
             print(f"Moving {name} arm on {arm.can_name} to its safe disconnect pose.")
             arm.safe_disconnect()
         time.sleep(5.0)
-        for name, arm in self._robot.follower_arms.items():
-            print(f"Disabling {name} arm on {arm.can_name}.")
-            arm.connect(enable=False)
+        if de_energize:
+            for name, arm in self._robot.follower_arms.items():
+                print(f"Disabling {name} arm on {arm.can_name}.")
+                arm.connect(enable=False)
 
     def _assert_connected(self) -> None:
         if not self._connected:
@@ -207,9 +217,11 @@ class PiperDualArmRobot(BaseRobot):
         self._assert_connected()
         if self.cameras_only:
             images = {name: np.array(cam.read(), copy=True) for name, cam in self._cameras.items()}
-            return {"state": np.zeros(14, dtype=np.float32), "images": images, "timestamp": time.time()}
+            self._last_state = np.zeros(14, dtype=np.float32)
+            return {"state": self._last_state.copy(), "images": images, "timestamp": time.time()}
         obs = self._robot.capture_observation()
         state = self._to_numpy(obs["observation.state"]).astype(np.float32, copy=True)
+        self._last_state = state.copy()
         images = {}
         for name in self._robot.cameras:
             key = f"observation.images.{name}"
@@ -222,8 +234,13 @@ class PiperDualArmRobot(BaseRobot):
         state = self.capture_observation()["state"]
         return RobotState(joint_positions=state, timestamp=time.time())
 
+    def apply_safety(self, action: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+        """安全链预览（不发送）：scale -> clamp -> smooth，相对最新反馈状态限幅。"""
+        return self.safety(action, current_state)
+
     def send_action(self, action: np.ndarray) -> None:
-        """下发 14D 绝对关节目标（左臂在前）。live 模式才允许调用。"""
+        """下发 14D 绝对关节目标（左臂在前）。内部先过安全链（BaseRobot 契约：
+        策略动作不允许绕过限幅/限速）。live 模式才允许调用。"""
         import torch
 
         self._assert_connected()
@@ -232,7 +249,10 @@ class PiperDualArmRobot(BaseRobot):
             raise ValueError(f"Piper 双臂动作必须 14D，收到 {action.shape}")
         if not np.isfinite(action).all():
             raise ValueError("Piper 动作包含 NaN/Inf，拒绝下发")
-        self._robot.send_action(torch.from_numpy(action))
+        if self._last_state is None:
+            raise RuntimeError("send_action 前必须至少 capture_observation() 一次以获得反馈状态")
+        command = self.safety(action, self._last_state)
+        self._robot.send_action(torch.from_numpy(command))
 
     def get_info(self) -> dict:
         return {

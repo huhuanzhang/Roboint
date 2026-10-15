@@ -27,7 +27,13 @@ class ResetMode(str, Enum):
 
 @dataclass
 class StepResult:
-    """step() 的返回，字段命名对齐 gymnasium 便于迁移。"""
+    """step() 的返回，字段命名对齐 gymnasium 便于迁移。
+
+    info 约定（可选键）：
+    - "command"：安全链（限幅/平滑）后实际下发或将要下发的命令。safety/RTC/smoothing
+      会让它与输入 action 不同；数据管线据此区分 policy_action 与 executed_action。
+      不提供时视为 action 即执行命令。
+    """
 
     observation: dict
     reward: float | None = None  # None = 延后打分（人工/奖励模型）
@@ -70,19 +76,32 @@ class BaseTask(ABC):
         chunk = np.asarray(chunk, dtype=np.float32)
         result = None
         intermediates = []
+        policy_actions = []
+        commands = []
+        rewards = []
         for action in chunk:
             result = self.step(action)
+            policy_actions.append(np.asarray(action, dtype=np.float32))
+            commands.append(np.asarray(result.info.get("command", action), dtype=np.float32))
             if record:
                 intermediates.append(result.observation)
+                rewards.append(result.reward)
             if result.terminated or result.truncated:
                 break
         assert result is not None, "动作块不能为空"
         result.info["intermediate_observations"] = intermediates
+        # rollout 记录转移需要知道块内实际执行了哪些动作/奖励（可能提前终止）
+        result.info["executed_actions"] = policy_actions  # 策略原始输出（安全链前）
+        result.info["executed_commands"] = commands       # 安全链后的执行命令
+        result.info["rewards"] = rewards
         return result
 
     def success(self) -> bool:
         """当前 episode 是否成功（真机上常由规则/人工/奖励模型判定）。"""
         return False
+
+    def close(self) -> None:
+        """释放任务持有的资源（如本体连接）。默认空实现。"""
 
     def get_info(self) -> dict:
         """任务元信息：动作语义、维度、控制频率等。"""

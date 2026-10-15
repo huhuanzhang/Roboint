@@ -14,4 +14,11 @@ cameras:
   left_wrist: 244222071617
   right_wrist: 317622070857
   front_view: 254622079402
-lerobot_piper_root: /home/ps/Documents/lerobot-piper-2
+lerobot_piper_root: ${oc.env:LEROBOT_PIPER_ROOT,../lerobot-piper-2}
+# 安全链参数：与 GUI config.json profile pi05_piper_fold_clothes_150000 的已验证值同源
+safety:
+  action_scale: 1.0
+  max_abs_delta: 0.01
+  gripper_max_abs_delta: 0.003
+  action_smoothing_alpha: 1.0
+  gripper_smoothing_alpha: 1.0

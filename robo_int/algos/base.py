@@ -27,6 +27,15 @@ class BaseAlgo(ABC):
         """在线交互时的动作选择（离线算法可不实现）。"""
         raise NotImplementedError(f"{type(self).__name__} 是离线更新型算法，不支持在线 act()。")
 
+    def observe(self, state, action, reward, next_state, done) -> None:
+        """在线交互：单条 transition 入算法内部缓冲（在线算法实现）。"""
+        raise NotImplementedError(f"{type(self).__name__} 是离线更新型算法，不支持在线 observe()。")
+
+    @property
+    def ready(self) -> bool:
+        """是否具备 update 条件（如回放缓冲已过预热期）；默认恒真。"""
+        return True
+
     # ------------------------------------------------------------------ 存取
 
     def save_state(self, path: str | Path) -> None:

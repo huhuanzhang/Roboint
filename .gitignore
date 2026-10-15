@@ -5,11 +5,21 @@ __pycache__/
 build/
 dist/
 .eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
 
 # 环境
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -17,14 +27,15 @@ venv/
 
 # 实验产物
 outputs/
-data/raw/
-data/processed/
-data/episodes/
+/data/
 runs/
 wandb/
 checkpoints/
 *.ckpt
 *.pt
+*.pth
+*.safetensors
+*.onnx
 *.npz
 
 # Hydra 多运行产物
@@ -33,3 +44,11 @@ multirun/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 本地备份与临时笔记（保留在磁盘，不上传）
+*.bak
+*.bak_*
+*.orig
+*.rej
+*~
+/tmp.md

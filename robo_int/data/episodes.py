@@ -30,6 +30,7 @@ class EpisodeMeta:
     score: float | None = None        # 数据质量分（data.scoring 填写）
     kept: bool = True                 # 清洗后是否保留（data.cleaning 填写）
     drop_reason: str | None = None
+    instruction: str | None = None    # 语言指令（VLA 任务的 task prompt）
     timestamp: float = field(default_factory=time.time)
     extra: dict = field(default_factory=dict)
 
@@ -38,10 +39,13 @@ class EpisodeMeta:
 class Episode:
     """内存中的 episode。数组按时间维堆叠。
 
-    - states:    (T+1, state_dim)   每步观测状态（含 episode 末尾终态）
-    - images:    {cam_name: (T+1, H, W, 3) uint8}，无图像任务为空 dict
-    - actions:   (T, action_dim)    与 states[:-1] 对齐
-    - rewards:   (T,)，可能延后填充
+    - states:         (T+1, state_dim)   每步观测状态（含 episode 末尾终态）
+    - images:         {cam_name: (T+1, H, W, 3) uint8}，无图像任务为空 dict
+    - actions:        (T, action_dim)    实际执行命令（安全链后），与 states[:-1] 对齐
+    - policy_actions: (T, action_dim)    策略原始输出（安全链前）；safety/RTC/smoothing
+                      会让两者不同，DAgger 等算法需要区分。缺省视为等于 actions
+    - rewards:        (T,)，可能延后填充
+    - timestamps:     (T+1,)，每拍观测的采集时间（unix 秒）
     """
 
     meta: EpisodeMeta
@@ -49,11 +53,17 @@ class Episode:
     actions: np.ndarray
     rewards: np.ndarray | None = None
     images: dict = field(default_factory=dict)
+    policy_actions: np.ndarray | None = None
+    timestamps: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.meta.num_steps = int(self.actions.shape[0])
         if self.rewards is not None and len(self.rewards) != len(self.actions):
             raise ValueError("rewards 与 actions 步数不一致")
+        if self.policy_actions is not None and len(self.policy_actions) != len(self.actions):
+            raise ValueError("policy_actions 与 actions 步数不一致")
+        if self.timestamps is not None and len(self.timestamps) != len(self.states):
+            raise ValueError("timestamps 与 states 步数不一致")
 
 
 class EpisodeStore:
@@ -80,6 +90,10 @@ class EpisodeStore:
         }
         if episode.rewards is not None:
             arrays["rewards"] = episode.rewards
+        if episode.policy_actions is not None:
+            arrays["policy_actions"] = episode.policy_actions
+        if episode.timestamps is not None:
+            arrays["timestamps"] = episode.timestamps
         for cam, frames in episode.images.items():
             arrays[f"image/{cam}"] = frames
         np.savez_compressed(path, **arrays)
@@ -114,6 +128,8 @@ class EpisodeStore:
             actions=data["actions"],
             rewards=data["rewards"] if "rewards" in data.files else None,
             images=images,
+            policy_actions=data["policy_actions"] if "policy_actions" in data.files else None,
+            timestamps=data["timestamps"] if "timestamps" in data.files else None,
         )
 
     def rewrite_index(self, metas: list[EpisodeMeta]) -> None:

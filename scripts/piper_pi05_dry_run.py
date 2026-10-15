@@ -6,7 +6,7 @@
 -> dry-run 记录（绝不下发电机命令）。
 
 用法（推荐 lerobot conda env，与 GUI client 相同）：
-    /home/ps/miniconda3/envs/lerobot/bin/python scripts/piper_pi05_dry_run.py
+    python scripts/piper_pi05_dry_run.py
     ... --cycles 24 --log-every 8
 真机 live（默认拒绝，必须显式 --mode live）：
     ... --mode live --cycles 60
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import signal
 import socket
 import subprocess
@@ -29,7 +30,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-import yaml
+from omegaconf import OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -83,11 +84,24 @@ def parse_args() -> argparse.Namespace:
                              "报告会把真实 state/臂读数标为 BLOCKED，不冒充通过")
     parser.add_argument("--request-timeout-s", type=float, default=60.0,
                         help="单次推理 wall-time 超过此值即安全退出")
+    parser.add_argument("--disable-arm-on-exit", action="store_true",
+                        help="live 归位后去使能（透传归位 launcher 的 DISABLE_ARM_ON_EXIT；"
+                             "默认保持使能，与 GUI client 退出约定一致）")
+    parser.add_argument("--max-abs-delta", default=None,
+                        help="覆盖 profile 的 max_abs_delta（rad/步）；'none' 关闭步限幅")
+    parser.add_argument("--gripper-max-abs-delta", default=None,
+                        help="覆盖 profile 的 gripper_max_abs_delta；'none' 关闭夹爪限幅")
+    parser.add_argument("--rtc", action="store_true",
+                        help="客户端 RTC 预取：每 --rtc-execution-horizon 步带 rtc_context "
+                             "重新推理（server 须以 --rtc-enabled 启动）")
+    parser.add_argument("--rtc-execution-horizon", type=int, default=10,
+                        help="RTC：两次推理间执行的控制步数（作为 rtc_context.execution_horizon 发送）")
     return parser.parse_args()
 
 
 def load_yaml(path: Path) -> dict:
-    return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    # 与 Hydra 入口一致，解析配置中的 oc.env 本机路径。
+    return OmegaConf.to_container(OmegaConf.load(path), resolve=True)
 
 
 def load_gui_profile(gui_config: Path, profile_id: str) -> tuple[dict, dict]:
@@ -100,9 +114,21 @@ def load_gui_profile(gui_config: Path, profile_id: str) -> tuple[dict, dict]:
 
 
 def port_open(host: str, port: int) -> bool:
+    # 探测后发一条最小 HTTP 请求再关闭：裸 TCP connect+close（0 字节）会让
+    # websockets server 记录 "opening handshake failed" 噪声；合法请求行由
+    # fork server 的 process_request(/healthz) 干净应答，不产生 ERROR 日志。
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(1.0)
-        return sock.connect_ex((host, port)) == 0
+        if sock.connect_ex((host, port)) != 0:
+            return False
+        try:
+            sock.sendall(
+                f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode("ascii")
+            )
+            sock.recv(64)  # 读走响应，避免关闭时 RST
+        except OSError:
+            pass
+        return True
 
 
 def launch_server(launcher: Path, checkpoint: Path, host: str, port: int, timeout_s: float) -> subprocess.Popen:
@@ -138,11 +164,64 @@ def busy_wait(duration: float) -> None:
         pass
 
 
+
+def restore_home(launcher: Path | None, *, de_energize: bool, timeout_s: float = 120.0) -> bool:
+    """live 收尾：调 GUI「双臂归位」同款 launcher（单一事实源：GUI config.json
+    的 paths.home_launcher），feedback 引擎缓动回零位，与 GUI 按钮行为一致。
+
+    launcher 独立进程组（start_new_session）：外部对 smoke 的 killpg 打断不了
+    缓动，smoke 进程被强杀时归位也能继续完成。缺失/异常/超时返回 False，
+    由调用方回退旧的 safe_disconnect 路径。
+    """
+    if launcher is None or not launcher.is_file():
+        print(f"!! 归位 launcher 不可用：{launcher}", flush=True)
+        return False
+    env = {**os.environ,
+           "RESTORE_PRESET": "level_gripper",
+           "RESTORE_OPEN_GRIPPER_FIRST": "true",  # 归位顺序：松夹爪->臂回零->夹爪回起始
+           "DRY_RUN": "false",
+           "DISABLE_ARM_ON_EXIT": "true" if de_energize else "false"}
+    print(f"== 双臂归位（launcher：{launcher}；顺序：松夹爪 -> 臂回零 -> 夹爪回起始；"
+          f"{'随后去使能' if de_energize else '保持使能'}）==", flush=True)
+    try:
+        proc = subprocess.Popen(["bash", str(launcher)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, start_new_session=True)
+    except Exception as exc:
+        print(f"!! 归位 launcher 启动失败：{type(exc).__name__}: {exc}", flush=True)
+        return False
+    try:
+        for line in proc.stdout:
+            print(f"[home] {line.rstrip()}", flush=True)
+        rc = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        print("!! 归位超时：终止归位进程组后回退旧安全路径", flush=True)
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                pass
+        return False
+    except Exception as exc:
+        print(f"!! 归位 launcher 异常：{type(exc).__name__}: {exc}", flush=True)
+        return False
+    if rc != 0:
+        print(f"!! 归位 launcher 退出码 {rc}", flush=True)
+        return False
+    return True
+
+
 def main() -> int:
     args = parse_args()
     install_signal_handlers()
     robot_cfg = load_yaml(args.robot_config)
     model_cfg = load_yaml(args.model_config)
+    # live 收尾的归位 launcher：单一事实源 = GUI config.json 的 paths.home_launcher
+    gui_paths = json.loads(Path(model_cfg["gui_config"]).read_text(encoding="utf-8")).get("paths", {})
+    home_launcher = Path(gui_paths["home_launcher"]) if gui_paths.get("home_launcher") else None
     profile, tasks = load_gui_profile(model_cfg["gui_config"], args.gui_profile or model_cfg["gui_profile_id"])
     task = tasks[profile["task_ids"][0]]
     checkpoint = Path(args.checkpoint or profile["checkpoint"])
@@ -159,9 +238,25 @@ def main() -> int:
         action_smoothing_alpha=float(profile.get("action_smoothing_alpha", 1.0)),
         gripper_smoothing_alpha=float(profile.get("gripper_smoothing_alpha", 1.0)),
     )
+    if args.max_abs_delta is not None:  # 实验台覆盖：'none' = 关闭步限幅
+        if args.max_abs_delta.strip().lower() == "none":
+            safety["max_abs_delta"] = None
+        else:
+            safety["max_abs_delta"] = float(args.max_abs_delta)
+    if args.gripper_max_abs_delta is not None:
+        if args.gripper_max_abs_delta.strip().lower() == "none":
+            safety["gripper_max_abs_delta"] = None
+        else:
+            safety["gripper_max_abs_delta"] = float(args.gripper_max_abs_delta)
     warmup_frames = int(args.camera_warmup_frames if args.camera_warmup_frames is not None
                         else profile.get("camera_warmup_frames", 0))
     print(f"目标链路：mode={args.mode} cycles={args.cycles} fps={fps} prompt={prompt!r}")
+    if args.rtc:
+        if args.rtc_execution_horizon < 1:
+            print("--rtc-execution-horizon 必须 >= 1")
+            return finish(1)
+        print(f"RTC：客户端预取开启，每 {args.rtc_execution_horizon} 步带 rtc_context 重推理；"
+              "旧 chunk 剩余动作继续执行，响应含衔接前缀，无缝切换")
     print(f"checkpoint（引用，不复制）：{checkpoint}")
     print(f"安全参数（GUI profile）：{safety}")
 
@@ -208,6 +303,16 @@ def main() -> int:
         check("policy", "task prompt", bool(prompt and prompt == task["prompt"]), repr(prompt))
         required_cameras = tuple(metadata.get("required_policy_cameras", ()))
         check("policy", "preprocessing（server 所需相机）", bool(required_cameras), ",".join(required_cameras))
+        if args.rtc and not (bool(metadata.get("rtc_supported")) and bool(metadata.get("rtc_enabled"))):
+            check("policy", "RTC（server 端）", False,
+                  f"supported={metadata.get('rtc_supported')} enabled={metadata.get('rtc_enabled')}"
+                  "；请用 --rtc-enabled 启动 server 后重试")
+            return finish(1)
+        if args.rtc:
+            check("policy", "RTC（server 端）", True,
+                  f"horizon={metadata.get('rtc_execution_horizon')} "
+                  f"guidance={metadata.get('rtc_max_guidance_weight')} "
+                  f"schedule={metadata.get('rtc_prefix_attention_schedule')}")
     except Exception as exc:
         check("policy", "policy server 连接", False, f"{type(exc).__name__}: {exc}")
         return finish(1)
@@ -225,6 +330,7 @@ def main() -> int:
         control_hz=fps,
         lerobot_piper_root=robot_cfg["lerobot_piper_root"],
         cameras_only=args.cameras_only,
+        safety_params=safety,  # live 下发路径与预览共用同一（可能已放宽的）安全链
     )
     try:
         robot.connect()
@@ -243,8 +349,71 @@ def main() -> int:
     shutdown_clean = False
 
     if args.mode == "live":
-        print("!! live 模式：将使能双臂并真实下发命令（沿用 GUI profile 限幅参数）", flush=True)
+        clamp_txt = (("不限幅" if safety["max_abs_delta"] is None else f"步限幅 {safety['max_abs_delta']}")
+                     + ("，夹爪不限幅" if safety["gripper_max_abs_delta"] is None
+                        else f"，夹爪限幅 {safety['gripper_max_abs_delta']}"))
+        print(f"!! live 模式：将使能双臂并真实下发命令（{clamp_txt}）；"
+              "结束后归位：先松夹爪 -> 双臂缓动回零 -> 夹爪回起始状态"
+              f"{'，随后去使能' if args.disable_arm_on_exit else '（保持使能）'}", flush=True)
         robot.enable()
+
+    # RTC 客户端调度状态（定义在 try 外：finally 可安全引用；闭包变量在循环内才被使用）
+    rtc_on = bool(args.rtc)
+    rtc_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1) if rtc_on else None
+    rtc_inflight: concurrent.futures.Future | None = None
+    rtc_inflight_delay = 0
+    rtc_chunk: np.ndarray | None = None
+    rtc_cursor = 0
+    rtc_steps_since_req = 0
+    rtc_ctx_sent = rtc_switches = rtc_applied_count = rtc_errors = 0
+    rtc_boundary_hist: list[float] = []
+
+    def _rtc_collect(*, block: bool) -> None:
+        """收取 RTC 预取结果并切换动作队列；block=True 表示旧动作已耗尽，阻塞等待。"""
+        nonlocal rtc_inflight, rtc_chunk, rtc_cursor, rtc_switches
+        nonlocal rtc_applied_count, rtc_errors, inference_failures
+        delay_sent = rtc_inflight_delay
+        old_chunk = rtc_chunk
+        old_cursor = len(old_chunk) - delay_sent  # 发请求时的真实游标（与上报值同源）
+        try:
+            result = rtc_inflight.result(timeout=args.request_timeout_s) if block else rtc_inflight.result()
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(
+                f"RTC 预取超过 {args.request_timeout_s}s，触发安全退出（未发送任何命令）"
+            ) from exc
+        except Exception as exc:
+            inference_failures += 1
+            rtc_errors += 1
+            print(f"RTC 预取失败 @step={step}: {type(exc).__name__}: {exc}", flush=True)
+            if inference_failures > 2:
+                raise
+            rtc_inflight = None
+            return
+        rtc_inflight = None
+        full = result.get("full_actions")
+        if full is None:
+            raise RuntimeError("server 未返回 full_actions（RTC 需要 Robo_int fork server）")
+        new_full = np.asarray(full, dtype=np.float32)
+        if new_full.ndim != 2 or new_full.shape[1] != 14 or not np.isfinite(new_full).all():
+            raise RuntimeError(f"RTC full_actions 异常: shape={new_full.shape}")
+        rtc_info = result.get("rtc") or {}
+        # 请求发出后已执行的旧步数 = 响应里需跳过的衔接前缀长度（新块下标与旧块对齐）
+        skip = max(0, delay_sent - len(pending))
+        cont_val = float("nan")
+        if skip and old_cursor + skip <= len(old_chunk):
+            window = np.linalg.norm(new_full[:skip] - old_chunk[old_cursor:old_cursor + skip], axis=1)
+            rtc_boundary_hist.extend(float(v) for v in window)
+            cont_val = float(np.mean(window))
+        rtc_chunk, rtc_cursor = new_full, skip
+        pending.clear()
+        pending.extend(new_full[skip:])
+        rtc_switches += 1
+        if rtc_info.get("rtc_applied"):
+            rtc_applied_count += 1
+        infer_ms_hist.append(getattr(policy, "last_infer_ms", 0.0))
+        print(f"[rtc] switch #{rtc_switches}: cursor {old_cursor}->{skip} delay={delay_sent} "
+              f"applied={bool(rtc_info.get('rtc_applied'))} queue={len(pending)} "
+              f"衔接L2={cont_val:.4f}", flush=True)
 
     try:
         if warmup_frames:
@@ -299,27 +468,81 @@ def main() -> int:
                 camera_ok = len(camera_names_ok) == len(required_cameras)
                 arm_state_ok = (not args.cameras_only) and state.shape == (14,) and np.isfinite(state).all()
 
+            if rtc_on and rtc_inflight is not None and rtc_inflight.done():
+                _rtc_collect(block=False)
+            if (rtc_on and rtc_inflight is None and rtc_chunk is not None
+                    and rtc_steps_since_req >= args.rtc_execution_horizon and pending):
+                # 游标必须取“当前”位置：full chunk 长度 - 剩余动作数。rtc_cursor 只在
+                # 切换时更新，直接引用会把过期游标发给 server，导致衔接前缀锚点整体前移
+                cursor_now = len(rtc_chunk) - len(pending)
+                rtc_ctx = {
+                    "previous_action_start_index": int(cursor_now),
+                    "delay_steps": int(len(pending)),
+                    "execution_horizon": int(args.rtc_execution_horizon),
+                }
+                rtc_inflight = rtc_executor.submit(
+                    policy.infer,
+                    {"state": state, "images": obs["images"], "rtc_context": rtc_ctx}, prompt)
+                rtc_inflight_delay = len(pending)
+                rtc_ctx_sent += 1
+                rtc_steps_since_req = 0
             if not pending:
-                try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            policy.predict_actions, {"state": state, "images": obs["images"]}, prompt
-                        )
-                        chunk = future.result(timeout=args.request_timeout_s)
-                except concurrent.futures.TimeoutError as exc:
-                    raise TimeoutError(
-                        f"推理超过 {args.request_timeout_s}s，触发安全退出（未发送任何命令）"
-                    ) from exc
-                except Exception as exc:
-                    inference_failures += 1
-                    print(f"推理失败 @step={step}: {type(exc).__name__}: {exc}", flush=True)
-                    if inference_failures > 2:
-                        raise
-                    continue
-                infer_ms_hist.append(getattr(policy, "last_infer_ms", 0.0))
-                pending.extend(np.asarray(chunk, dtype=np.float32))
+                if rtc_on and rtc_inflight is not None:
+                    _rtc_collect(block=True)  # 旧动作耗尽：阻塞等预取结果（通常早已就绪）
+                elif rtc_on:
+                    # RTC 首块 / 异常重试：不带 rtc_context（server 镜像队列由本响应重建），
+                    # 从完整 chunk 起步，游标归零
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(
+                                policy.infer, {"state": state, "images": obs["images"]}, prompt
+                            )
+                            result = future.result(timeout=args.request_timeout_s)
+                    except concurrent.futures.TimeoutError as exc:
+                        raise TimeoutError(
+                            f"推理超过 {args.request_timeout_s}s，触发安全退出（未发送任何命令）"
+                        ) from exc
+                    except Exception as exc:
+                        inference_failures += 1
+                        print(f"推理失败 @step={step}: {type(exc).__name__}: {exc}", flush=True)
+                        if inference_failures > 2:
+                            raise
+                        continue
+                    full = result.get("full_actions")
+                    if full is None:
+                        raise RuntimeError("server 未返回 full_actions（RTC 需要 Robo_int fork server）")
+                    rtc_chunk = np.asarray(full, dtype=np.float32)
+                    if rtc_chunk.ndim != 2 or rtc_chunk.shape[1] != 14 or not np.isfinite(rtc_chunk).all():
+                        raise RuntimeError(f"RTC full_actions 异常: shape={rtc_chunk.shape}")
+                    infer_ms_hist.append(getattr(policy, "last_infer_ms", 0.0))
+                    rtc_cursor = 0
+                    rtc_steps_since_req = 0
+                    pending.extend(rtc_chunk)
+                else:
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(
+                                policy.predict_actions, {"state": state, "images": obs["images"]}, prompt
+                            )
+                            chunk = future.result(timeout=args.request_timeout_s)
+                    except concurrent.futures.TimeoutError as exc:
+                        raise TimeoutError(
+                            f"推理超过 {args.request_timeout_s}s，触发安全退出（未发送任何命令）"
+                        ) from exc
+                    except Exception as exc:
+                        inference_failures += 1
+                        print(f"推理失败 @step={step}: {type(exc).__name__}: {exc}", flush=True)
+                        if inference_failures > 2:
+                            raise
+                        continue
+                    infer_ms_hist.append(getattr(policy, "last_infer_ms", 0.0))
+                    pending.extend(np.asarray(chunk, dtype=np.float32))
+            if not pending:  # RTC 收取失败且无旧动作可执行：跳过本步，下轮重试
+                continue
 
             model_action = pending.popleft()
+            if rtc_on:
+                rtc_steps_since_req += 1
             command = chain(model_action, state)  # 真实安全链：scale -> clamp -> smooth
             sent_commands.append(command)
             if args.mode == "live":
@@ -346,14 +569,33 @@ def main() -> int:
                   f"chunk=({actions_per_inference},14) mean_infer={np.mean(infer_ms_hist):.0f}ms")
         check("policy", "all finite", bool(sent_commands) and all(np.isfinite(c).all() for c in sent_commands),
               f"{len(sent_commands)} 条命令")
+        if args.rtc:
+            if rtc_boundary_hist:
+                cont_txt = (f"衔接 L2 mean={np.mean(rtc_boundary_hist):.4f} "
+                            f"max={np.max(rtc_boundary_hist):.4f} n={len(rtc_boundary_hist)}")
+            else:
+                cont_txt = "无衔接窗口（未触发切换或 skip=0）"
+            ok_rtc = rtc_errors == 0 and rtc_applied_count == rtc_switches
+            check("policy", "RTC 预取", ok_rtc if rtc_switches else None,
+                  f"{rtc_switches} 次切换 / {rtc_applied_count} 次 rtc_applied / "
+                  f"{rtc_ctx_sent} 次上下文请求；{cont_txt}"
+                  + ("（步数不足未触发切换）" if rtc_switches == 0 else ""))
     except KeyboardInterrupt:
         print("中断：进入安全退出路径（不发送任何电机命令）。", flush=True)
     finally:
-        # 停止路径：与 GUI client 的 disconnect_robot_without_arm_motion 一致，
-        # dry-run / 中断都只停相机，不使能、不移动手臂
+        if rtc_executor is not None:
+            rtc_executor.shutdown(wait=False, cancel_futures=True)  # 不等在途预取；线程随进程退出
+        # 停止路径：dry-run / 中断只停相机（同 GUI client 的
+        # disconnect_robot_without_arm_motion）；live 收尾走 GUI「双臂归位」
+        # 同款 launcher（feedback 引擎缓动回零位，--disable-arm-on-exit 透传
+        # DISABLE_ARM_ON_EXIT）；launcher 缺失/失败才回退旧的 safe_disconnect 路径
         try:
             if args.mode == "live":
-                robot.disable()
+                if restore_home(home_launcher, de_energize=args.disable_arm_on_exit):
+                    robot.disconnect()  # 归位成功：只停相机（臂已由 launcher 收尾）
+                else:
+                    print("!! 双臂归位不可用，回退：写 safe_disconnect 姿态收尾", flush=True)
+                    robot.disable(de_energize=args.disable_arm_on_exit)
             else:
                 robot.disconnect()
             shutdown_clean = True
@@ -365,17 +607,27 @@ def main() -> int:
 
     # ---------------------------------------------------------------- Safety / 汇总
     print("\n== Safety ==", flush=True)
-    check("safety", "dry-run（未发送电机命令）", args.mode == "dry_run" and not command_sent_any)
-    check("safety", "command_sent=false", not command_sent_any,
-          "live 模式应为 true" if args.mode == "live" else "")
+    # mode-aware：live 断言"已发送"，dry-run 断言"未发送"，各自语义诚实
+    if args.mode == "live":
+        check("safety", "live（已发送电机命令）", command_sent_any,
+              f"{len(sent_commands)} 条命令已真实下发")
+        check("safety", "command_sent=true", command_sent_any, "live 模式预期真实下发")
+    else:
+        check("safety", "dry-run（未发送电机命令）", not command_sent_any)
+        check("safety", "command_sent=false", not command_sent_any)
     check("safety", "timeout protection", True,
           f"request_timeout={args.request_timeout_s}s，超时触发安全退出")
-    check("safety", "stop path", shutdown_clean, "信号处理 -> 停相机 -> 干净退出（无手臂动作）")
+    if args.mode == "live":
+        stop_detail = ("信号处理 -> 停相机 -> 松夹爪+归位+夹爪回起始 + 去使能" if args.disable_arm_on_exit
+                       else "信号处理 -> 停相机 -> 松夹爪+归位+夹爪回起始（保持使能）")
+    else:
+        stop_detail = "信号处理 -> 停相机 -> 干净退出（无手臂动作）"
+    check("safety", "stop path", shutdown_clean, stop_detail)
 
     print("\n== Integration ==", flush=True)
-    core_ok = (args.mode == "dry_run" and camera_ok and action_ok
+    core_ok = (camera_ok and action_ok
                and inference_failures == 0 and len(sent_commands) >= min(args.cycles, 1)
-               and not command_sent_any)
+               and (command_sent_any if args.mode == "live" else not command_sent_any))
     if args.cameras_only:
         # cameras-only 用的是合成零 state：只报诊断链路，禁止报告 full pipeline PASS
         check("integration", "cameras-only 诊断链路（真实相机 + 合成零 state）", core_ok,
@@ -383,8 +635,12 @@ def main() -> int:
         check("integration", "Robo_int → Piper full dry-run pipeline", None,
               "cameras-only 模式不评级；需真实 14D state（去掉 --cameras-only 复跑）")
     else:
-        check("integration", "Robo_int → Piper full dry-run pipeline", core_ok and arm_state_ok,
-              f"{len(sent_commands)} cycles 全链路（真实 14D state + 真实相机 + π0.5 + safety，未发送命令）")
+        integ_title = ("Robo_int → Piper full live pipeline" if args.mode == "live"
+                       else "Robo_int → Piper full dry-run pipeline")
+        integ_detail = (f"{len(sent_commands)} cycles 全链路（真实 14D state + 真实相机 + π0.5 + safety + 命令已下发）"
+                        if args.mode == "live" else
+                        f"{len(sent_commands)} cycles 全链路（真实 14D state + 真实相机 + π0.5 + safety，未发送命令）")
+        check("integration", integ_title, core_ok and arm_state_ok, integ_detail)
 
     print("\n== Parity（对 smolvla_piper_control_gui） ==", flush=True)
     print(f"  camera 顺序: {','.join(required_cameras)}（server 由 checkpoint 决定，双端一致）")

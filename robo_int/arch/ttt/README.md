@@ -26,3 +26,18 @@
 2. [ ] 精读 RoboTTT 论文/开源（若有代码放出），校准：层插入位置、自监督目标、fast weights 尺寸
 3. [ ] MockVLA 序列通路挂载（mock 任务加"需要记忆"的变体验证增益）
 4. [ ] GR00T N1.7 上复现（同款基模，路线直接可抄）
+
+## 当前状态（2026-09-16，B4 功能链路验证）
+
+- [x] TTT-Linear 独立实现（`ttt_layer.py`：mini-batch 快权重在线更新 + 残差
+      gate 注入；persist 模式跨请求保快权重）+ 单元测试（`tests/test_ttt_layer.py`：
+      逐 token 参考递推等价、chunk 参考等价、delta-rule 误差下降性质、零效应、
+      attach/detach、save/load、backward）；**玩具记忆增益实验未做**（效果级
+      验证超本仓库功能链路口径，保持 TODO）。
+- [ ] 精读 RoboTTT 论文/开源校准（层插入位置、自监督目标、fast weights 尺寸）。
+- [ ] MockVLA 序列通路挂载 + 记忆变体增益。
+- [ ] GR00T N1.7 上复现。
+
+接线：π0.5 fork server CLI `--arch-ttt --ttt-active --ttt-gate --ttt-latent
+--ttt-lr --ttt-chunk --ttt-persist`（`robo_int/models/pi05/server.py`
+`_install_ttt`）；注入点与 MEM 同面（embed_prefix 包裹），与 MEM/AQV 可叠加。

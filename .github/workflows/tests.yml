@@ -1,0 +1,45 @@
+name: CPU tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]" build
+      - name: Check Python syntax and names
+        run: python -m ruff check --select E9,F63,F7,F82 robo_int scripts tests
+      - name: Run tests
+        run: python -m pytest tests/ -q
+      - name: Run mock pipeline
+        run: |
+          python scripts/teleop_collect.py data.num_episodes=5
+          python scripts/score_and_clean.py
+          python scripts/train_sft.py infra.total_steps=20 infra.batch_size=8 infra.log_every=10
+          python scripts/eval_on_robot.py eval.num_episodes=2
+      - name: Build source and wheel distributions
+        run: python -m build

@@ -1,0 +1,7 @@
+# 真机叠衣服任务（Piper 双臂 + π0.5）：本体由 robot 配置组装配（factory.build_robot）。
+# dry_run 默认 true：读真实 state/相机、执行安全链并记录命令，绝不发送电机命令。
+name: fold_clothes
+max_episode_steps: 24      # 一个 episode 的控制步数（本测试约 24 步）
+dry_run: true
+instruction: fold the clothes neatly
+camera_warmup_frames: 30

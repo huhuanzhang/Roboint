@@ -82,6 +82,22 @@ class BaseRobot(ABC):
     def send_action(self, action: np.ndarray) -> None:
         """下发一步动作。语义由 get_info()['action_spec'] 描述（如 delta ee pose / 关节位置目标）。"""
 
+    def capture_observation(self) -> dict:
+        """带相机的完整观测（VLA 推理输入），结构对齐 BaseTask.get_observation。
+
+        默认实现：只有本体状态、无相机。带相机的本体（如 Piper 双臂）重写此方法。
+        """
+        state = self.get_state()
+        return {"images": {}, "state": state.to_vector(), "instruction": ""}
+
+    def apply_safety(self, action: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+        """安全链预览：返回限幅/平滑后的命令但不发送（dry-run 记录用）。
+
+        默认实现为恒等（无额外安全约束的本体）；send_action 内部应施加与
+        apply_safety 一致的变换，保证 dry-run 记录与真机下发一致。
+        """
+        return np.asarray(action, dtype=np.float32)
+
     def enable(self) -> None:
         """使能并进入受控状态（默认空实现，SDK 不支持时可跳过）。"""
 

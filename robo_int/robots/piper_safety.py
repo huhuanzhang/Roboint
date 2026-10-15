@@ -28,8 +28,9 @@ class PiperDualArmSafetyChain:
         gripper_smoothing_alpha: float = 1.0,
     ):
         self.action_scale = float(action_scale)
-        self.max_abs_delta = float(max_abs_delta)
-        self.gripper_max_abs_delta = float(gripper_max_abs_delta)
+        # None = 显式关闭对应限幅（实验台选项；其余护栏不变）
+        self.max_abs_delta = None if max_abs_delta is None else float(max_abs_delta)
+        self.gripper_max_abs_delta = None if gripper_max_abs_delta is None else float(gripper_max_abs_delta)
         self.action_smoothing_alpha = float(action_smoothing_alpha)
         self.gripper_smoothing_alpha = float(gripper_smoothing_alpha)
         self._previous_action: np.ndarray | None = None
@@ -85,8 +86,12 @@ class PiperDualArmSafetyChain:
         scale_can0_action, clamp_can0_action = self._import_piper_helpers()
         scaled = scale_can0_action(model_action, current_state, self.action_scale)
         scaled = self._apply_gripper_scale(scaled, model_action, current_state)
-        clamped = clamp_can0_action(scaled, current_state, self.max_abs_delta)
-        clamped = self._apply_gripper_clamp(clamped, current_state)
+        if self.max_abs_delta is None:
+            clamped = scaled
+        else:
+            clamped = clamp_can0_action(scaled, current_state, self.max_abs_delta)
+        if self.gripper_max_abs_delta is not None:
+            clamped = self._apply_gripper_clamp(clamped, current_state)
         final = self._smooth(clamped)
         final = np.asarray(final, dtype=np.float32)
         self._previous_action = final.copy()

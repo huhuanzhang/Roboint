@@ -94,3 +94,27 @@ def test_pi05_server_policy_validates_observation():
         policy.predict_actions(
             {"state": np.zeros(14, dtype=np.float32), "images": {"head": np.zeros((480, 640, 3), np.uint8)}}
         )
+
+
+def test_pi05_connect_uses_installed_client(monkeypatch):
+    """openpi_client 已安装时，无需额外提供源码 checkout。"""
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    monkeypatch.delenv("OPENPI_CLIENT_SRC", raising=False)
+
+    class InstalledClient:
+        def __init__(self, host, port):
+            self.host, self.port = host, port
+
+        def get_server_metadata(self):
+            return {"required_policy_cameras": ["head"]}
+
+    module = ModuleType("openpi_client")
+    module.websocket_client_policy = SimpleNamespace(WebsocketClientPolicy=InstalledClient)
+    monkeypatch.setitem(sys.modules, "openpi_client", module)
+    policy = Pi05ServerPolicy()
+
+    assert policy.openpi_client_src is None
+    assert policy.connect()["required_policy_cameras"] == ["head"]
+    assert policy.required_cameras == ("head",)

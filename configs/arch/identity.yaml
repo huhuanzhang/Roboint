@@ -1,0 +1,3 @@
+# 恒等挂件（A 类 external/runtime）：观测/动作全透传。
+# 用途：验证挂件挂载机制；输出必须与 arch=none 完全一致（数值级）。
+name: identity

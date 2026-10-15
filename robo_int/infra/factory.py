@@ -14,6 +14,8 @@ from robo_int.algos.sft import SFT
 from robo_int.infra.config import RolloutConfig, TrainConfig
 from robo_int.models.base import BaseVLA
 from robo_int.models.mock import MockVLA
+from robo_int.robots.base import BaseRobot
+from robo_int.robots.mock import MockRobot
 from robo_int.tasks.base import BaseTask, PolicyFn
 from robo_int.tasks.mock_reach import MockReachExpert, MockReachTask
 
@@ -34,7 +36,18 @@ def build_task(cfg: DictConfig) -> BaseTask:
             max_episode_steps=cfg.task.max_episode_steps,
             action_limit=cfg.task.action_limit,
         )
-    raise KeyError(f"未知任务 {name}；可选：mock_reach / mock_pick_place（真机任务随硬件接入补齐）")
+    if name == "fold_clothes":
+        # 真机 VLA 任务：本体由 robot 配置组装配，任务只做编排（dry-run 默认）
+        from robo_int.tasks.fold_clothes import FoldClothesTask
+
+        return FoldClothesTask(
+            robot=build_robot(cfg),
+            max_episode_steps=cfg.task.max_episode_steps,
+            dry_run=bool(cfg.task.get("dry_run", True)),
+            instruction=cfg.task.get("instruction", "fold the clothes neatly"),
+            camera_warmup_frames=int(cfg.task.get("camera_warmup_frames", 0)),
+        )
+    raise KeyError(f"未知任务 {name}；可选：mock_reach / mock_pick_place / fold_clothes（真机任务随硬件接入补齐）")
 
 
 def build_expert(cfg: DictConfig) -> PolicyFn:
@@ -56,6 +69,33 @@ def build_expert(cfg: DictConfig) -> PolicyFn:
 
 
 def build_model(cfg: DictConfig) -> BaseVLA:
+    """组装基模并按 cfg.arch 包 A 类挂件（external/runtime wrapper）。"""
+    return apply_arch(_build_model(cfg), cfg)
+
+
+def apply_arch(model: BaseVLA, cfg: DictConfig) -> BaseVLA:
+    """按 cfg.arch 挂架构插件。
+
+    - A 类（external/runtime）：包 VLAWrapper，观测/动作边界生效，任何 BaseVLA
+      （含 server 托管的 Pi05ServerPolicy）都能挂；
+    - B 类（internal/model，attention 变体 / LoRA / MEM / TTT）：需要模型内部
+      接入点，见 arch/base.py 与各子包 README，不在此伪装成 wrapper。
+    """
+    arch_cfg = cfg.get("arch", None)
+    if arch_cfg is None or str(arch_cfg.get("name", "none")) == "none":
+        return model
+    name = str(arch_cfg.name)
+    if name == "identity":
+        from robo_int.arch.identity import IdentityArch
+
+        return IdentityArch(model)
+    raise KeyError(
+        f"未知 A 类挂件 {name}；可选：none / identity"
+        "（attention/LoRA/MEM/TTT 属 B 类，需模型内部接入点，不走 wrapper）"
+    )
+
+
+def _build_model(cfg: DictConfig) -> BaseVLA:
     name = cfg.model.name
     dropout = float(cfg.infra.regularization.dropout)  # infra 选项注入模型构造
     if name == "mock":
@@ -78,6 +118,7 @@ def build_model(cfg: DictConfig) -> BaseVLA:
             port=int(cfg.model.get("port", 8011)),
             prompt=cfg.model.get("prompt", "fold the clothes neatly"),
             actions_per_inference=int(cfg.model.get("actions_per_inference", 8)),
+            openpi_client_src=cfg.model.get("openpi_client_src"),
         )
     if name == "gr00t_n17":
         from robo_int.models.gr00t_n17 import Gr00tN17VLA
@@ -108,11 +149,12 @@ def build_algo(cfg: DictConfig, model: BaseVLA) -> BaseAlgo:
 
         return RLT(
             model,
-            action_limit=cfg.task.action_limit,
+            action_limit=cfg.task.get("action_limit", 0.15),
             action_mode=cfg.algo.get("action_mode", "direct"),
             token_dim=cfg.algo.get("token_dim", 64),
             utd=cfg.algo.get("utd", 2),
             start_steps=cfg.algo.get("start_steps", 300),
+            batch_size=cfg.algo.get("batch_size", 256),
             seed=cfg.infra.seed,
         )
     if name == "dsrl":
@@ -156,14 +198,37 @@ def build_algo(cfg: DictConfig, model: BaseVLA) -> BaseAlgo:
 def model_policy_fn(model: BaseVLA) -> PolicyFn:
     """把 BaseVLA 适配成 PolicyFn（rollout/评测用）。
 
-    动作块取第一步执行（receding horizon，真机 VLA 的标准用法）。
+    返回完整动作块 (chunk_size, action_dim)；块由 rollout -> BaseTask.execute_chunk
+    逐步执行（VLA 的标准用法）。chunk_size=1 的模型行为与单步策略完全一致。
     """
 
     def policy(observation: dict):
-        chunk = model.predict_actions(observation)
-        return chunk[0]
+        return model.predict_actions(observation)
 
     return policy
+
+
+def build_robot(cfg: DictConfig) -> BaseRobot:
+    """按 robot 配置组装配本体；真机任务经 build_task 内部调用。"""
+    name = cfg.robot.name
+    if name == "mock":
+        return MockRobot(num_joints=cfg.robot.num_joints, control_hz=cfg.robot.control_hz)
+    if name == "piper_dual_arm":
+        from robo_int.robots.piper_dual_arm import PiperDualArmRobot
+
+        safety = cfg.robot.get("safety", {})
+        return PiperDualArmRobot(
+            cameras={k: int(v) for k, v in cfg.robot.cameras.items()},
+            left_can_name=cfg.robot.left_can_name,
+            right_can_name=cfg.robot.right_can_name,
+            fps=int(cfg.robot.camera_fps),
+            width=int(cfg.robot.camera_width),
+            height=int(cfg.robot.camera_height),
+            control_hz=float(cfg.robot.control_hz),
+            lerobot_piper_root=cfg.robot.lerobot_piper_root,
+            safety_params=dict(safety) if safety else None,
+        )
+    raise KeyError(f"未知本体 {name}；可选：mock / piper_dual_arm（其余随硬件接入补齐）")
 
 
 def build_rollout_cfg(cfg: DictConfig) -> RolloutConfig:

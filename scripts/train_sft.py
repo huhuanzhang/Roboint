@@ -40,9 +40,11 @@ def main(cfg: DictConfig) -> None:
     final_ckpt = loop.run()
     print(f"训练完成，最终权重：{final_ckpt}")
 
-    # 4. 评测
+    # 4. 评测（训练末验证，不落盘；数采保存走 teleop_collect / eval.save_episodes=true）
     task = build_task(cfg)
-    metrics = evaluate(task, model_policy_fn(model), build_rollout_cfg(cfg))
+    rollout_cfg = build_rollout_cfg(cfg)
+    rollout_cfg.save_episodes = False
+    metrics = evaluate(task, model_policy_fn(model), rollout_cfg)
     print(f"评测：{metrics}")
 
 

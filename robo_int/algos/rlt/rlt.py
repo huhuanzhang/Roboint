@@ -155,16 +155,22 @@ class RLT(BaseAlgo):
 
     # ------------------------------------------------------------------ 在线交互
 
-    def _features(self, state: np.ndarray) -> torch.Tensor:
-        """obs.state -> 冻结 VLA 特征（无梯度）。"""
+    def _features(self, observation: dict) -> torch.Tensor:
+        """完整观测 dict（state/images/…）-> 冻结 VLA 特征（无梯度）。
+
+        真实 VLA（如 π0.5）的特征依赖视觉，observation 需带 images；
+        mock 基模只读 state，行为不变。
+        """
         with torch.no_grad():
-            feats = self.model.extract_features({"state": np.asarray(state, dtype=np.float32)})
+            obs = dict(observation)
+            obs["state"] = np.asarray(obs["state"], dtype=np.float32)
+            feats = self.model.extract_features(obs)
         return feats.detach()
 
-    def _token(self, state: np.ndarray) -> torch.Tensor:
-        """obs.state -> RL token（无梯度版本，act 用）。"""
+    def _token(self, observation: dict) -> torch.Tensor:
+        """观测 dict -> RL token（无梯度版本，act 用）。"""
         with torch.no_grad():
-            token = self.token_head.encode(self._features(state))
+            token = self.token_head.encode(self._features(observation))
         return token
 
     def _predict_base_batch(self, states: np.ndarray) -> np.ndarray:
@@ -196,20 +202,40 @@ class RLT(BaseAlgo):
                 self._np_rng.uniform(-self.action_limit, self.action_limit, self.action_dim)
                 .astype(np.float32)
             )
-        token = self._token(state)
+        token = self._token(observation)
         action, _, mean = self.actor(token)
         raw = (mean if deterministic else action).reshape(-1)  # 去掉 batch 维
         if self.action_mode == "residual":
             raw = torch.as_tensor(self.last_base) + raw
         return np.clip(raw.detach().numpy(), -self.action_limit, self.action_limit).astype(np.float32)
 
-    def observe(self, state, action, reward, next_state, done, base_action=None) -> None:
+    def observe(
+        self,
+        state,
+        action,
+        reward,
+        next_state,
+        done,
+        base_action=None,
+        observation: dict | None = None,
+        next_observation: dict | None = None,
+    ) -> None:
         """单条 transition 入回放缓冲（在线交互循环每步调用）。
 
         base_action：residual 模式该步 act() 采样到的 VLA 原动作（未限幅）。
         标准循环 act -> step -> observe 顺序下缺省自动取 ``self.last_base``；
         direct 模式存零占位（回放 schema 统一，critic 不使用）。
+
+        observation / next_observation：完整观测 dict（含 images），需成对提供。
+        给定时当场计算冻结 VLA 特征并缓存进回放——真实 VLA 的特征依赖视觉，
+        update 时只有 state 无法重算；mock 基模不传此参，行为与历史版本一致。
         """
+        if (observation is None) != (next_observation is None):
+            raise ValueError("observation 与 next_observation 必须成对提供（特征缓存）")
+        feature = next_feature = None
+        if observation is not None:
+            feature = self._features(observation).cpu().numpy()
+            next_feature = self._features(next_observation).cpu().numpy()
         if self.buffer is None:
             dim = int(np.asarray(state).shape[-1])
             self.buffer = SimpleReplayBuffer(
@@ -217,12 +243,16 @@ class RLT(BaseAlgo):
                 dim,
                 self.action_dim,
                 seed=int(self._np_rng.integers(1 << 31)),
+                feature_dim=int(feature.shape[-1]) if feature is not None else None,
             )
         if base_action is None:
             base_action = self.last_base
         if base_action is None:  # direct 模式 / residual 未经过 act 的手动灌数据
             base_action = np.zeros(self.action_dim, dtype=np.float32)
-        self.buffer.add(state, action, reward, next_state, done, base_action=base_action)
+        self.buffer.add(
+            state, action, reward, next_state, done,
+            base_action=base_action, feature=feature, next_feature=next_feature,
+        )
 
     @property
     def ready(self) -> bool:
@@ -262,12 +292,19 @@ class RLT(BaseAlgo):
         residual = self.action_mode == "residual"
 
         # ---- 特征/token（VLA 冻结，只训练 token head 及之后的组件）
-        features = self._features(state.numpy())
+        # 回放带特征列时直接用缓存（observe 时一次 VLA 前向算好）；
+        # 否则从 state 重算（mock 基模的 state-only 特征，历史行为）
+        if "observation.feature" in batch:
+            features = torch.as_tensor(batch["observation.feature"], dtype=torch.float32)
+            next_features = torch.as_tensor(batch["next_observation.feature"], dtype=torch.float32)
+        else:
+            features = self._features({"state": state.numpy()})
+            next_features = self._features({"state": next_state.numpy()})
         token = self.token_head.encode(features)
 
         # ---- 1) critic + token_head：Q 回归 + 重建辅助（表征学习的锚）
         with torch.no_grad():
-            next_token = self.token_head.encode(self._features(next_state.numpy()))
+            next_token = self.token_head.encode(next_features)
             next_a, next_logp, _ = self.actor(next_token)
             if residual:
                 # s' 的 base 重新采一次：部署时 executed = clip(VLA(s') + 残差)，

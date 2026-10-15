@@ -2,3 +2,4 @@
 ckpt: outputs/run/checkpoints/final.ckpt
 num_episodes: 20
 seed: null
+save_episodes: false   # true 时评测 episode 写入 data.data_dir（评测即数采）

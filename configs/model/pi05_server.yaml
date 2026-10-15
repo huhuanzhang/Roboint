@@ -7,11 +7,11 @@ actions_per_inference: 8
 state_dim: 14
 action_dim: 14
 prompt: fold the clothes neatly
-openpi_client_src: /home/ps/Documents/kai0/packages/openpi-client/src
+openpi_client_src: ${oc.env:OPENPI_CLIENT_SRC,null}
 # GUI 侧真实运行配置（checkpoint 路径 + 安全参数 + prompt 的唯一来源）
-gui_config: /home/ps/Documents/zhanghaoyi/smolvla_piper_control_gui/config.json
+gui_config: ${oc.env:ROBO_INT_GUI_CONFIG,../smolvla_piper_control_gui/config.json}
 gui_profile_id: pi05_piper_fold_clothes_150000
-server_launcher: /home/ps/Documents/zhanghaoyi/smolvla_piper_control_gui/start_smolvla_server.sh
+server_launcher: ${oc.env:ROBO_INT_SERVER_LAUNCHER,../smolvla_piper_control_gui/start_smolvla_server.sh}
 server_start_timeout_s: 300
 # RTC：GUI 真实叠衣服使用 RTC=true（delay=2, horizon=10, weight=10, EXP）。
 # smoke test 第一阶段只验证链路，默认关；接 RTC 时由 server 端参数开启。

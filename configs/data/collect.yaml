@@ -5,3 +5,5 @@ seed: 0
 save_episodes: true
 min_score: 0.3
 max_steps_percentile: 99.0
+lerobot_out: data/lerobot    # LeRobot 转换输出目录
+convert_kept_only: true       # 只转换清洗后保留的 episode

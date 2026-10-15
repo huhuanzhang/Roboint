@@ -2,11 +2,11 @@
 
 真机机器人 VLA/RL 后训练研究仓库。对标 RLinf。核心诉求"能跑优先"：让用户自研算法构思最快上真机（Unitree 人形 + 强脑 Revo2 灵巧手）闭环验证。
 
-## 本地开发环境（Windows）
+## 本地开发环境
 
-- 测试/运行 Python：`D:\conda_envs\ai\python.exe`（3.11，torch 2.12 CPU，numpy）
-- 跑测试：`D:/conda_envs/ai/python.exe -m pytest tests/ -q`
-- 冒烟训练：`D:/conda_envs/ai/python.exe scripts/train_sft.py`（默认全 mock，CPU 可跑）
+- Python >=3.10，推荐在虚拟环境执行 `python -m pip install -e ".[dev]"`
+- 跑测试：`python -m pytest tests/ -q`
+- 冒烟训练：先按 README 采集、清洗 Mock 数据，再运行 `python scripts/train_sft.py`（CPU 可跑）
 - 目标运行环境是 Linux + CUDA；真机 SDK、pi05/gr00t 等重依赖都是惰性导入，禁止在核心接口文件顶部 import 它们
 
 ## 约定
@@ -23,7 +23,7 @@
 - `robo_int/robots/` 硬件抽象（BaseRobot/CompositeRobot + unitree/ brainco_revo2/ stub）
 - `robo_int/tasks/` 任务环境（BaseTask + mock_reach / mock_pick_place 可跑示例；任务族路线见 tasks/README.md）
 - `robo_int/models/` 基模接入（BaseVLA + pi05/ gr00t_n17/ fast_wam/ 接入路线 README）
-- `robo_int/arch/` 架构改进挂件（attention 接口已实现、LoRA 工具就位；MEM/TTT/in-context/轨迹prompt 为 stub + 论文链接）
-- `robo_int/algos/` SFT 已实现；rlt/ dsrl/ sarm2/ 是设计笔记 + stub
+- `robo_int/arch/` 架构改进挂件（attention、LoRA、MEM、TTT 已有功能实现；in-context/轨迹 prompt 为 stub）
+- `robo_int/algos/` SFT、RLT 和 mock 规模 SARM2 已实现；DSRL 为 stub
 - `robo_int/data/` episode 格式、打分(scoring)、清洗(cleaning)、LeRobot 转换
 - `robo_int/infra/` TrainLoop、rollout runner、配置 schema

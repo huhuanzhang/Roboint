@@ -72,3 +72,29 @@ def test_sarm2_algo_and_task_swaps():
     assert isinstance(algo, SARM2)
     assert algo.num_primitives == len(cfg.algo.primitives)
     assert algo.phase == "stage"
+
+
+def test_external_paths_follow_environment(monkeypatch, tmp_path):
+    """环境变量经 Hydra 组合和 factory 传给适配器，不连接硬件或服务。"""
+    from robo_int.infra.factory import build_robot
+
+    client_src = tmp_path / "openpi-client" / "src"
+    piper_root = tmp_path / "lerobot-piper-2"
+    monkeypatch.setenv("OPENPI_CLIENT_SRC", str(client_src))
+    monkeypatch.setenv("LEROBOT_PIPER_ROOT", str(piper_root))
+    cfg = _compose(["model=pi05_server", "robot=piper_dual_arm"])
+
+    assert build_model(cfg).openpi_client_src == client_src
+    assert build_robot(cfg).lerobot_piper_root == piper_root
+
+
+def test_dry_run_resolves_environment_paths(monkeypatch, tmp_path):
+    """独立 dry-run 入口与 Hydra 入口使用相同的环境变量语义。"""
+    from pathlib import Path
+
+    from scripts.piper_pi05_dry_run import load_yaml
+
+    gui_config = tmp_path / "config.json"
+    monkeypatch.setenv("ROBO_INT_GUI_CONFIG", str(gui_config))
+    cfg = load_yaml(Path("configs/model/pi05_server.yaml"))
+    assert cfg["gui_config"] == str(gui_config)

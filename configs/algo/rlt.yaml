@@ -5,3 +5,4 @@ token_dim: 64          # RL token 维度（论文用 transformer 读出，mock �
 action_mode: direct    # direct | residual（residual = actor 输出加在 VLA 动作上，本仓库设计选择）
 utd: 2                 # 每步环境交互的更新次数（updates-to-data）
 start_steps: 300       # 预热随机探索步数
+batch_size: 256        # 每次梯度步的回放采样批量

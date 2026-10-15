@@ -18,7 +18,7 @@ def main(cfg: DictConfig) -> None:
     store = EpisodeStore(cfg.data.data_dir)
     # 打分器的动作量纲来自任务元信息
     task = build_task(cfg)
-    action_limit = task.get_info().get("action_limit", cfg.task.action_limit)
+    action_limit = task.get_info().get("action_limit", cfg.task.get("action_limit", 1.0))
     scorer = default_scorer(action_limit=action_limit)
 
     metas = score_all(store, scorer)
